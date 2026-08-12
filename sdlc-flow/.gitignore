@@ -1,0 +1,12 @@
+# Python caches
+__pycache__/
+*.pyc
+*.pyo
+
+# macOS
+.DS_Store
+
+# Packaging / validation artifacts (produced by skill-creator)
+*.zip
+dist/
+build/

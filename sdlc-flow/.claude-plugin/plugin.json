@@ -1,0 +1,12 @@
+{
+  "name": "sdlc-flow",
+  "description": "研发全流程 plugin：需求 PRD → 设计 → 开发 → 测试 四阶段 17 个 skill，含多端开发（un-multi-platform-dev）。基于 Agent Skills 开放标准，可装到 Claude Code / Cursor / Codex。",
+  "version": "1.0.0",
+  "author": {
+    "name": "周康"
+  },
+  "keywords": ["sdlc", "prd", "tech-design", "multi-platform", "testing", "workflow", "codex", "cursor", "claude"],
+  "homepage": "https://github.com/zhoukang/unravel_skills",
+  "license": "MIT",
+  "skills": "./skills/"
+}
