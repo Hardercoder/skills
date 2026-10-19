@@ -145,7 +145,7 @@ platforms).
      data-model / i18n-key parity across **all** platforms) and emits a
      suggested-checkpoints YAML you can paste back into the contract
      (reverse-sync when code leads).
-   - `--source <platform>` (symbol mode): treat a designated platform as the
+   - `--source PLATFORM` (symbol mode): treat a designated platform as the
      temporary truth and report how far every other platform lags it — the
      source-of-truth migration / catch-up view (use with Mode C).
    - The contract may record each checkpoint's `source` / `since` (see
