@@ -46,6 +46,10 @@ Establish the 真源 in one of two ways:
    "Flutter 是真源"). Read that implementation, lift it into a platform-agnostic
    contract, then implement the other platforms from the contract.
 
+**契约是永久真源，端只是实现。** Platform-first 只应作为冷启动：把首个真源端提升成
+契约后，就让契约接管，不要再长期把某个具体端当作真源（那会导致"哪个端是真源"反复横跳）。
+之后任何端领先了，都把它的变更 promote 进契约、再让其它端追上（见下面 Mode C）。
+
 Always confirm the 真源 before writing code on more than one platform.
 
 ## 保证多端一致的多种方式（不止 OpenSpec / SpecKit）
@@ -136,9 +140,19 @@ platforms).
    - `checkpoint` mode: requires a contract with a `## 检查点` block; greps each
      platform for the expected symbols and emits a feature×platform coverage
      matrix. This is the deterministic, CI-friendly gate.
-   - `symbol` mode: code-only; compares route/screen tokens across comparable
-     platforms and emits a suggested-checkpoints YAML you can paste back into
-     the contract (reverse-sync when code leads).
+   - `symbol` mode: code-only; compares tokens across comparable platforms
+     (default `--axis routes`; also `api` / `model` / `i18n` for endpoint /
+     data-model / i18n-key parity across **all** platforms) and emits a
+     suggested-checkpoints YAML you can paste back into the contract
+     (reverse-sync when code leads).
+   - `--source <platform>` (symbol mode): treat a designated platform as the
+     temporary truth and report how far every other platform lags it — the
+     source-of-truth migration / catch-up view (use with Mode C).
+   - The contract may record each checkpoint's `source` / `since` (see
+     `feature-contract.md` 的"真源与溯源"); the checkpoint report then shows a
+     "真源与溯源" table (current truth platform + date + contract `version`),
+     which is the at-a-glance answer to "where is the latest truth for every
+     feature".
    Example: `python3 scripts/drift_check.py --platform ios:IOS_PATH
    --platform flutter:FLUTTER_PATH --contract contract.md --report drift.md`
    The drift report is the trigger for the AI reconciliation step below — it
@@ -163,6 +177,15 @@ platforms).
   Platform Notes and in the sync report — do not silently alter the 真源.
 - The source platform remains the reference. If a target diverges by design,
   update the contract and (optionally) reflect the change back into the source.
+
+### Mode C — 真源迁移 / Re-baseline（source-of-truth migration）
+
+When a platform (call it B) later leads the contract and becomes the de-facto new
+真源, promote B's领先 parts into the contract and bring the other platforms (A/C/D)
+up to date, restoring "the contract is the latest 真源 for every feature". Detailed
+steps in `references/workflows.md` → Mode C. This is the standard close-out for
+"一开始 A 是真源、后来 B 是真源": never keep flip-flopping which platform is truth —
+promote the leader's changes into the contract, then catch everyone else up.
 
 ## Rules
 

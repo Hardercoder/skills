@@ -96,6 +96,50 @@ wechat_mp / uniapp`（它们的界面以路由/页面字符串表达，可对齐
 > "功能逻辑是否一致"，只能看"界面/入口是否齐"。它是 checkpoint 模式的前置与补充，
 > 不是替代。最终以 checkpoint 模式（契约为真源）为准。
 
+## 多维 parity（--axis）
+
+symbol 模式默认只比"路由/页面"（屏幕级），可切换轴做更细的跨端一致性探查：
+
+| `--axis` | 比什么 | 哪些端可比 |
+|----------|--------|------------|
+| `routes`（默认） | 路由 / 页面字符串（叶节点归一化） | 仅 web/Flutter/RN/WeChat/Uni-app |
+| `api` | API 端点路径（如 `/api/v1/users`） | 全部端（含 iOS/Android） |
+| `model` | 数据模型 / 实体 / 字段名 | 全部端 |
+| `i18n` | 国际化字符串 key（`t('...')` / `NSLocalizedString` / `R.string.x` / `.arb`/`.json`） | 全部端 |
+
+```bash
+# 比各端 API 端点是否齐
+python3 scripts/drift_check.py --platform ios:I --platform flutter:F \
+  --platform android:A --axis api
+
+# 比各端 i18n 文案 key 是否齐（最容易被静默漏翻的维度）
+python3 scripts/drift_check.py --platform ios:I --platform flutter:F --axis i18n
+```
+
+这些都是**启发式、低置信**的探查，用来发现"哪端缺了入口/接口/字段/文案"，最终仍需
+以 checkpoint 模式（契约为真源）确认。
+
+## 以指定端为临时真源（--source，真源迁移 / 追赶视图）
+
+当你怀疑某端（记为 B）领先于其它端、成为事实新真源时，用 `--source B` 让脚本以 B 的
+代码为临时基准，报告每个其它端相对 B 还差哪些项——这就是"真源从 A 切到 B 后，怎么让
+所有功能追平"的直接答案（配合 `workflows.md` 的 Mode C 使用）。
+
+```bash
+python3 scripts/drift_check.py --platform flutter:F --platform ios:I \
+  --platform android:A --source flutter --axis routes
+# 输出：iOS / Android 各"落后 flutter N 项：profile, settings, ..."
+```
+
+`--source` 仅在 symbol 模式生效；给的端名必须真实存在（否则报错退出）。
+
+## checkpoint 模式里的真源溯源
+
+若在契约检查点里写了 `source:` / `since:`（见 `feature-contract.md` 的"真源与溯源"
+章节），checkpoint 报告会额外输出一张"真源与溯源"表：每条功能当前的真源端和设定日期，
+以及契约 `version`。真源迁移（Mode C）后把 `source` 改成新领先端、`version` +1，这张表
+就是"所有功能最新真源在哪"的总览。
+
 ## 接入 CI（让滞后自动暴露）
 
 把漂移检查当门禁，规范就不会悄悄落后：

@@ -12,19 +12,35 @@ Two modes:
       Reads structured "checkpoints" from a contract markdown file and greps
       each platform's code for the expected symbols. Produces a
       feature x platform coverage matrix (present / absent per platform).
+      Also reads each checkpoint's `source` / `since` provenance fields and
+      surfaces them so you can see which platform is the current truth for
+      each feature.
 
   symbol      (code-driven, heuristic, low-confidence)
-      Extracts route / screen / public-symbol tokens from each platform and
-      reports tokens present in some but not all comparable platforms - a
+      Extracts tokens from each platform along a chosen AXIS and reports
+      tokens present in some but not all comparable platforms - a
       best-effort drift signal - and emits a "suggested checkpoints" YAML
       block you can paste into the contract to bootstrap ongoing checks.
+
+      Axis (--axis):
+        routes  screen / route strings (default; only web/Flutter/RN/WeChat/
+                Uni-app are comparable - native iOS/Android UI is not strings)
+        api     API endpoint path tokens (all platforms comparable)
+        model   data-model / entity / field names (all platforms comparable)
+        i18n    internationalization string keys (all platforms comparable)
 
 Mode `auto` (default) picks checkpoint when a parseable contract is given,
 otherwise symbol.
 
+`--source PLATFORM` (symbol mode): treat the named platform as the temporary
+truth and report how far every other platform lags it (the source-of-truth
+migration / catch-up view). Combine with --axis to focus the comparison.
+
 Usage:
     python3 drift_check.py --workspace <ws> [--platform NAME:PATH ...]
                            [--contract <md>] [--mode auto|checkpoint|symbol]
+                           [--axis routes|api|model|i18n]
+                           [--source <platform>]
                            [--report <md>] [--json]
 
 Platform names: ios, android, flutter, react_native, react_web, vue_web,
@@ -253,6 +269,7 @@ def parse_checkpoints(md_text):
         if not isinstance(data, dict):
             raise ValueError('top-level must be a mapping')
         default_match = data.get('default_match')
+        version = data.get('version')
         raw_list = data.get('checkpoints') or []
         cps = []
         for item in raw_list:
@@ -261,15 +278,18 @@ def parse_checkpoints(md_text):
             cps.append({
                 'id': str(item.get('id', '')),
                 'desc': str(item.get('desc', '')),
+                'source': str(item['source']) if item.get('source') else '',
+                'since': str(item.get('since', '')),
                 'match': {k: str(v) for k, v in (item.get('match') or {}).items()},
             })
-        return (cps, default_match, [])
+        return (cps, default_match, [], version)
     except Exception:
         pass  # fall back to minimal parser
 
     # Minimal parser for the documented flat subset.
     checkpoints = []
     default_match = None
+    version = None
     current = None
     for raw in block.splitlines():
         line = raw.rstrip()
@@ -277,7 +297,8 @@ def parse_checkpoints(md_text):
             continue
         m = re.match(r'^\s*-\s*id:\s*(.+)$', line)
         if m:
-            current = {'id': _strip_quotes(m.group(1)), 'desc': '', 'match': {}}
+            current = {'id': _strip_quotes(m.group(1)), 'desc': '',
+                       'source': '', 'since': '', 'match': {}}
             checkpoints.append(current)
             continue
         km = re.match(r'^([\w.]+):\s?(.*)$', line.strip())
@@ -286,29 +307,38 @@ def parse_checkpoints(md_text):
         key, val = km.group(1), km.group(2)
         if key == 'default_match':
             default_match = _strip_quotes(val)
+        elif key == 'version':
+            version = _strip_quotes(val)
         elif key == 'checkpoints':
             continue
         elif current is not None:
             if key == 'desc':
                 current['desc'] = _strip_quotes(val)
+            elif key == 'source':
+                current['source'] = _strip_quotes(val)
+            elif key == 'since':
+                current['since'] = _strip_quotes(val)
             elif key.startswith('match.'):
                 plat = key[len('match.'):]
                 current['match'][plat] = _strip_quotes(val)
-    return (checkpoints, default_match, [])
+    return (checkpoints, default_match, [], version)
 
 
 # --------------------------------------------------------------------------
 # Modes
 # --------------------------------------------------------------------------
 def run_checkpoint(platforms, contract_text):
-    checkpoints, default_match, errors = parse_checkpoints(contract_text)
+    checkpoints, default_match, errors, version = parse_checkpoints(contract_text)
     if errors:
-        return {'mode': 'checkpoint', 'errors': errors, 'matrix': []}
+        return {'mode': 'checkpoint', 'errors': errors, 'matrix': [],
+                'version': None}
     matrix = []
     for cp in checkpoints:
         if not cp['id']:
             continue
-        row = {'id': cp['id'], 'desc': cp['desc'], 'cells': {}}
+        row = {'id': cp['id'], 'desc': cp['desc'],
+               'source': cp.get('source', ''), 'since': cp.get('since', ''),
+               'cells': {}}
         for name, roots in platforms.items():
             pat = (cp['match'].get(name)
                    or cp['match'].get('*')
@@ -337,7 +367,7 @@ def run_checkpoint(platforms, contract_text):
                 }
         matrix.append(row)
     return {'mode': 'checkpoint', 'errors': errors, 'matrix': matrix,
-            'default_match': default_match}
+            'default_match': default_match, 'version': version}
 
 
 def _route_tokens(root):
@@ -372,28 +402,128 @@ def _route_tokens(root):
     return toks
 
 
-def run_symbol(platforms):
-    """Route/screen parity across comparable platforms + suggested checkpoints.
+def _api_tokens(root):
+    """API endpoint path tokens: quoted paths that look like REST endpoints
+    (>=2 segments, exclude asset dirs and file paths)."""
+    toks = set()
+    rx = re.compile(r'["\'`](/[A-Za-z0-9_/:.\-{}]+)["\'`]')
+    for dirpath, dirs, files in os.walk(root):
+        dirs[:] = [d for d in dirs if d not in IGNORE_DIRS]
+        for fn in files:
+            p = os.path.join(dirpath, fn)
+            if not _is_textish(p):
+                continue
+            try:
+                with open(p, 'r', encoding='utf-8', errors='ignore') as fh:
+                    text = fh.read()
+            except OSError:
+                continue
+            for m in rx.finditer(text):
+                t = m.group(1)
+                if '.' in t:  # skip file paths like /foo/bar.png
+                    continue
+                segs = [s for s in t.strip('/').split('/') if s]
+                if len(segs) < 2:
+                    continue
+                if any(s.lower() in ('assets', 'images', 'img', 'fonts',
+                                     'static', 'css', 'js', 'dist', 'node_modules',
+                                     'lib', 'build') for s in segs):
+                    continue
+                toks.add(t)
+    return toks
 
-    Screens are compared on their LEAF segment (e.g. `/settings` and
-    `pages/settings/settings` both collapse to `settings`) so the same screen
-    is recognized across platforms that name routes differently.
+
+def _model_tokens(root):
+    """Best-effort entity / field names from class/struct/data-class defs."""
+    toks = set()
+    pats = [
+        r'\b(?:class|struct|data class|interface|enum|typealias|protocol)\s+([A-Za-z_]\w*)',
+        r'(?:var|val|let)\s+([A-Za-z_]\w*)',
+        r'@property\s+(?:\([^)]*\)\s*)?(?:weak\s+|strong\s+)?(?:IBOutlet\s+)?([A-Za-z_]\w*)',
+    ]
+    rxs = [re.compile(p) for p in pats]
+    for dirpath, dirs, files in os.walk(root):
+        dirs[:] = [d for d in dirs if d not in IGNORE_DIRS]
+        for fn in files:
+            p = os.path.join(dirpath, fn)
+            if not _is_textish(p):
+                continue
+            try:
+                with open(p, 'r', encoding='utf-8', errors='ignore') as fh:
+                    text = fh.read()
+            except OSError:
+                continue
+            for rx in rxs:
+                for m in rx.finditer(text):
+                    toks.add(m.group(1))
+    return toks
+
+
+def _i18n_tokens(root):
+    """Best-effort i18n string keys from t()/NSLocalizedString/R.string/arb/json."""
+    toks = set()
+    pats = [
+        r'\b(?:t|trans|i18n\.t|useTranslation|translate)\s*\(\s*[\'"]([A-Za-z0-9_.\-]+)[\'"]',
+        r'NSLocalizedString\s*\(\s*@?[\'"]?([A-Za-z0-9_.\-]+)[\'"]?',
+        r'\bR\.(?:string|plurals)\.([A-Za-z0-9_.\-]+)',
+        r'\bLocalizedString\s*\(\s*[\'"]([A-Za-z0-9_.\-]+)[\'"]',
+    ]
+    rxs = [re.compile(p) for p in pats]
+    for dirpath, dirs, files in os.walk(root):
+        dirs[:] = [d for d in dirs if d not in IGNORE_DIRS]
+        for fn in files:
+            p = os.path.join(dirpath, fn)
+            if not _is_textish(p):
+                continue
+            try:
+                with open(p, 'r', encoding='utf-8', errors='ignore') as fh:
+                    text = fh.read()
+            except OSError:
+                continue
+            for rx in rxs:
+                for m in rx.finditer(text):
+                    toks.add(m.group(1))
+            low = fn.lower()
+            if low.endswith(('.json', '.arb', '.strings')):
+                for km in re.finditer(r'^\s*["\']?([A-Za-z0-9_.\-]+)["\']?\s*[:=]', text, re.M):
+                    toks.add(km.group(1))
+    return toks
+
+
+def extract_axis(root, axis):
+    """Dispatch token extraction by axis (routes | api | model | i18n)."""
+    if axis == 'api':
+        return _api_tokens(root)
+    if axis == 'model':
+        return _model_tokens(root)
+    if axis == 'i18n':
+        return _i18n_tokens(root)
+    return _route_tokens(root)  # default routes
+
+
+def run_symbol(platforms, axis='routes', source=None):
+    """Token parity across comparable platforms (axis) + optional lag vs source.
+
+    For axis=api/model/i18n every platform is comparable (native iOS/Android
+    APIs/models/strings count). For axis=routes only web/Flutter/RN/WeChat/Uni-app
+    are comparable. Screens/paths are normalized to the LEAF segment so the same
+    screen is recognized across platforms that name routes differently.
     """
     comparable = {n: rs for n, rs in platforms.items() if n in ROUTE_PLATFORMS}
+    if axis in ('api', 'model', 'i18n'):
+        comparable = dict(platforms)  # all platforms comparable on these axes
     if not comparable:
         return {'mode': 'symbol',
-                'note': 'No route-comparable platforms detected '
-                        '(web/Flutter/RN/WeChat/Uni-app). Symbol mode needs at '
-                        'least two of those.',
-                'leaf_map': {}, 'drift': [], 'suggested': []}
-    # leaf -> platform -> set(raw tokens)
+                'note': f'No comparable platforms detected for axis={axis}.',
+                'axis': axis, 'leaf_map': {}, 'drift': [], 'suggested': [],
+                'lag': {}}
     leaf_map = {}
     for name, roots in comparable.items():
         raw = set()
         for r in roots:
-            raw |= _route_tokens(r)
+            raw |= extract_axis(r, axis)
         for t in raw:
-            leaf = t.strip('/').split('/')[-1]
+            leaf = t.strip('/').split('/')[-1] if axis in ('routes', 'api') else t
             leaf_map.setdefault(leaf, {}).setdefault(name, set()).add(t)
 
     names = list(comparable.keys())
@@ -410,20 +540,44 @@ def run_symbol(platforms):
             })
     drift.sort(key=lambda d: (len(d['missing_in']), d['leaf']), reverse=True)
 
-    # Suggested checkpoints (reverse-sync aid): one per screen, with the
+    # Suggested checkpoints (reverse-sync aid): one per token, with the
     # per-platform regex alternation of the raw tokens that represent it.
     suggested = []
     for leaf, by_plat in leaf_map.items():
         match = {p: '|'.join(re.escape(t) for t in sorted(toks))
                  for p, toks in by_plat.items()}
         suggested.append({
-            'id': re.sub(r'[^a-z0-9]+', '-', leaf.lower()).strip('-') or 'route',
-            'desc': f'路由/页面: {leaf}',
+            'id': re.sub(r'[^a-z0-9]+', '-', leaf.lower()).strip('-') or 'item',
+            'desc': f'{axis} 项: {leaf}',
             'match': match,
         })
-    return {'mode': 'symbol', 'leaf_map': {k: {p: sorted(v) for p, v in pl.items()}
-                                           for k, pl in leaf_map.items()},
-            'drift': drift, 'suggested': suggested, 'platforms': names}
+
+    # Lag vs a designated source platform (source-of-truth migration view).
+    lag = {}
+    if source:
+        if source not in names:
+            return {'mode': 'symbol',
+                    'note': f'--source {source} not among detected platforms '
+                            f'({", ".join(names)}).',
+                    'axis': axis,
+                    'leaf_map': {k: {p: sorted(v) for p, v in pl.items()}
+                                 for k, pl in leaf_map.items()},
+                    'drift': drift, 'suggested': suggested, 'lag': {},
+                    'platforms': names}
+        src_leaves = {leaf for leaf, by_plat in leaf_map.items()
+                      if source in by_plat}
+        for name in names:
+            if name == source:
+                continue
+            tgt_leaves = {leaf for leaf, by_plat in leaf_map.items()
+                          if name in by_plat}
+            lag[name] = sorted(src_leaves - tgt_leaves)
+
+    return {'mode': 'symbol', 'axis': axis, 'source': source,
+            'leaf_map': {k: {p: sorted(v) for p, v in pl.items()}
+                         for k, pl in leaf_map.items()},
+            'drift': drift, 'suggested': suggested, 'lag': lag,
+            'platforms': names}
 
 
 # --------------------------------------------------------------------------
@@ -451,18 +605,32 @@ def render_console(result, platforms):
                      for n in names if row['cells'].get(n, {}).get('status') == 'absent')
         lines.append(f'\n{len(result["matrix"])} checkpoints x {len(names)} platforms; '
                      f'{n_miss} absent (drift) cells.')
+        if result.get('version') is not None:
+            lines.append(f'契约版本: v{result["version"]}')
+        for row in result['matrix']:
+            if row.get('source'):
+                when = f' @ {row["since"]}' if row.get('since') else ''
+                lines.append(f'  - {row["id"]}: 当前真源 = {row["source"]}{when}')
     else:
         note = result.get('note')
         if note:
             lines.append(note)
             return '\n'.join(lines)
-        lines.append(f'Symbol mode (route parity) across: {", ".join(result.get("platforms", []))}')
+        axis = result.get('axis', 'routes')
+        lines.append(f'Symbol mode (axis={axis}) across: {", ".join(result.get("platforms", []))}')
         if result.get('drift'):
-            lines.append(f'\nDrift candidates ({len(result["drift"])}): screen present in some, missing in others')
+            what = 'screen' if axis == 'routes' else axis + ' item'
+            lines.append(f'\nDrift candidates ({len(result["drift"])}): {what} present in some, missing in others')
             for d in result['drift'][:30]:
                 lines.append(f'  {d["leaf"]}  missing in: {", ".join(DISPLAY.get(x, x) for x in d["missing_in"])}')
         else:
-            lines.append('\nNo screen drift detected across comparable platforms.')
+            lines.append(f'\nNo {axis} drift detected across comparable platforms.')
+        if result.get('lag'):
+            src = result.get('source')
+            lines.append(f'\n相对指定真源 {src} 的落后 (--source):')
+            for plat, items in result['lag'].items():
+                lines.append(f'  {DISPLAY.get(plat, plat)} 落后 {len(items)} 项: '
+                             + ', '.join(items[:20]))
         lines.append(f'\nSuggested checkpoints for reverse-sync: {len(result.get("suggested", []))} (see report/JSON).')
     return '\n'.join(lines)
 
@@ -497,6 +665,22 @@ def render_markdown(result, platforms):
         out.append('')
         out.append('> ✘ = expected symbol not found in that platform -> likely drift. '
                    'Update the contract or the code, then re-run.')
+        if result.get('version') is not None:
+            out.append('')
+            out.append(f'**契约版本:** v{result["version"]}')
+        prov = [(r['id'], r.get('source', ''), r.get('since', ''))
+                for r in result['matrix'] if r.get('source')]
+        if prov:
+            out.append('')
+            out.append('## 真源与溯源 (Source of Truth)')
+            out.append('')
+            out.append('| Checkpoint | 当前真源端 | 设定日期 |')
+            out.append('|------------|-----------|----------|')
+            for cid, src, since in prov:
+                out.append(f'| {cid} | {src} | {since or "-"} |')
+            out.append('')
+            out.append('> 真源端记录的是"最后设定/领先该检查点的一端"。真源迁移（Mode C）'
+                       '后这里会更新为新的领先端，契约 version 同时 +1。')
     else:
         out.append(f'Mode: **symbol** (code-driven, low-confidence heuristic).')
         note = result.get('note')
@@ -507,9 +691,14 @@ def render_markdown(result, platforms):
         out.append('')
         out.append(f'Comparable platforms: {", ".join(result.get("platforms", []))}')
         out.append('')
+        out.append(f'**Axis:** `{result.get("axis", "routes")}` '
+                   f'(routes 只看叶节点归一化；api/model/i18n 全平台可比)')
+        out.append('')
         out.append('## Drift candidates')
-        out.append('Screens present in some platforms but missing in others '
-                   '(normalized to the leaf screen segment):')
+        axis_noun = ('Screen' if result.get('axis', 'routes') == 'routes'
+                     else result.get('axis', 'routes').capitalize() + ' item')
+        out.append(f'{axis_noun}s present in some platforms but missing in others '
+                   '(normalized to the leaf segment for routes/api):')
         out.append('')
         if result.get('drift'):
             out.append('| Screen | Present in | Missing in | Example tokens |')
@@ -523,6 +712,18 @@ def render_markdown(result, platforms):
                            + ex + ' |')
         else:
             out.append('_No screen drift detected across comparable platforms._')
+        if result.get('lag'):
+            out.append('')
+            out.append(f'## 相对指定真源 {result.get("source")} 的落后 (--source)')
+            out.append('')
+            out.append('| Platform | 落后项数 | 缺失项（叶节点） |')
+            out.append('|----------|----------|----------------|')
+            for plat, items in result['lag'].items():
+                out.append(f'| {DISPLAY.get(plat, plat)} | {len(items)} | '
+                           + ', '.join(f'`{i}`' for i in items[:15]) + ' |')
+            out.append('')
+            out.append('> 这是真源迁移 / 追赶视图：以指定端为临时真源，其它端相对它'
+                       '还差哪些项。逐项补齐后即追平。')
         out.append('')
         out.append('## Suggested checkpoints (reverse-sync aid)')
         out.append('Paste into the contract under `## 检查点` to bootstrap ongoing checks:')
@@ -548,6 +749,9 @@ def main():
                     help='NAME:PATH explicit platform root (repeatable)')
     ap.add_argument('--contract', help='Path to the feature contract markdown')
     ap.add_argument('--mode', choices=['auto', 'checkpoint', 'symbol'], default='auto')
+    ap.add_argument('--axis', choices=['routes', 'api', 'model', 'i18n'], default='routes',
+                    help='symbol-mode comparison axis (default routes)')
+    ap.add_argument('--source', help='platform name to treat as temporary truth (symbol mode)')
     ap.add_argument('--report', help='Write the markdown report to this path')
     ap.add_argument('--json', action='store_true', help='Emit JSON')
     args = ap.parse_args()
@@ -570,13 +774,18 @@ def main():
     if mode == 'auto':
         mode = 'checkpoint' if (contract_text and parse_checkpoints(contract_text)[0]) else 'symbol'
 
+    if args.source and args.source not in PLATFORM_KEYS:
+        sys.stderr.write(f'--source must be a known platform, got: {args.source}\n'
+                         f'Known: {", ".join(sorted(PLATFORM_KEYS))}\n')
+        sys.exit(2)
+
     if mode == 'checkpoint':
         if not contract_text:
             sys.stderr.write('checkpoint mode requires --contract.\n')
             sys.exit(2)
         result = run_checkpoint(platforms, contract_text)
     else:
-        result = run_symbol(platforms)
+        result = run_symbol(platforms, args.axis, args.source)
 
     result['platforms'] = {n: roots for n, roots in platforms.items()}
 

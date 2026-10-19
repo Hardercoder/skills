@@ -11,11 +11,11 @@ skills/                      (this repo root)
 ├── README.md               ← you are here
 ├── LICENSE
 ├── .gitignore
-└── sdlc-flow/              ← full SDLC plugin (PRD → design → dev → test)
+└── sdlc-flow/              ← full SDLC plugin (PRD → design → dev → test, + discipline & missing stages)
     ├── plugin.md           plugin manifest + routing + contract notes
     ├── .claude-plugin/      Claude Code plugin manifest (plugin.json)
-    ├── shared/              cross-stage templates (PRD/AC/design/tasks/test/report)
-    └── skills/             17 skills, one folder each
+    ├── shared/              17 cross-stage templates (PRD/AC/design/tasks/test/report + spike/threat/data-model/adr/i18n/a11y/doc/release/observability/postmortem)
+    └── skills/             34 skills, one folder each
 ```
 
 ## Install
@@ -48,7 +48,8 @@ Pick the tool you use. The **whole `sdlc-flow/` folder** must be copied together
 
 ```mermaid
 flowchart LR
-  R[需求 Requirement] --> D[设计 Design] --> V[开发 Development] --> T[测试 Testing]
+  S[需求前] --> R[需求] --> D[设计] --> V[开发] --> T[测试] --> P[发版/上线] --> O[运维]
+  S -->|un-tech-spike| SPIKE[tech-spike.md go/no-go]
   R -->|un-prd-writer| PRD[PRD.md]
   R -->|un-requirement-clarify| CLR[澄清问题]
   R -->|un-acceptance-criteria| AC[AC.md]
@@ -57,37 +58,67 @@ flowchart LR
   D -->|un-api-design| API[api-spec]
   D -->|un-ui-spec| UI[ui-spec / tokens.json]
   D -->|un-task-breakdown| TASK[tasks.md]
+  D -->|un-threat-modeling| TM[threat-model.md]
+  D -->|un-data-model| DM[data-model.md]
+  D -->|un-adr| ADR[adr/]
+  D -->|un-i18n-plan| I18N[i18n-plan.md]
+  D -->|un-a11y-check| A11Y[a11y-check.md]
   V -->|un-multi-platform-dev| CODE[多端代码 + sync-report]
   V -->|un-code-implement| CODE2[单端代码]
+  V -->|un-tdd-guard| TDD[RED-GREEN-REFACTOR]
   V -->|un-code-review| REV[review 意见]
   T -->|un-test-case-gen| TC[test-cases.md]
   T -->|un-unit-test-gen| UT[单元测试]
   T -->|un-e2e-test-gen| E2E[e2e 脚本]
   T -->|un-bug-triage| BUG[缺陷分析]
   T -->|un-test-report| REP[report.md]
+  P -->|un-doc-gen| DOC[docs/]
+  P -->|un-release-checklist| REL[release-checklist.md]
+  P -->|un-cicd| CI[cicd.md]
+  P -->|un-observability-plan| OBS[observability-plan.md]
+  O -->|un-postmortem| PM[postmortem/]
 ```
 
-### The 17 skills
+> **Methodology discipline layer** (new): `un-tdd-guard`, `un-systematic-debugging`, `un-verify-before-done`, `un-git-worktree`, `un-parallel-agents` — these enforce *how* to build (inspired by the Superpowers philosophy: process over prompts, verify before claiming done), and can be invoked at any phase.
+
+### The 34 skills
+
+**Phase skills (17, original)** — see `sdlc-flow/plugin.md` for the full per-skill table; key ones:
 
 | Stage | Skill | Produces | Notes |
 |---|---|---|---|
 | — (router) | `un-sdlc-orchestrator` | pipeline state in `.sdlc/` | optional glue; sub-skills callable alone |
 | Requirement | `un-prd-writer` | `PRD.md` | accepts 飞书/腾讯文档 links or pasted text |
-| Requirement | `un-requirement-clarify` | clarification questions + revised PRD | gap/ambiguity/conflict detection |
-| Requirement | `un-acceptance-criteria` | `AC.md` | Given/When/Then + DoD |
-| Requirement | `un-user-story-map` | story map | optional, for large requirements |
 | Design | `un-tech-design` | `design.md` + platform-agnostic contract | contract feeds `un-multi-platform-dev` |
-| Design | `un-api-design` | `api-spec` | OpenAPI/GraphQL/Protobuf |
-| Design | `un-ui-spec` | `ui-spec` / `tokens.json` | reads MasterGo / Figma exports |
-| Design | `un-task-breakdown` | `tasks.md` | WBS, estimates, dependencies |
 | Development | `un-multi-platform-dev` | multi-platform code + sync-report | spec-first, Python drift-check scripts |
-| Development | `un-code-implement` | single-platform code | for non-multi-platform tasks |
-| Development | `un-code-review` | review notes | diff analysis, risks, fixes |
-| Testing | `un-test-case-gen` | `test-cases.md` | functional/boundary/exception |
-| Testing | `un-unit-test-gen` | unit test skeletons | per project framework |
-| Testing | `un-e2e-test-gen` | e2e scripts | integration / key journeys |
-| Testing | `un-bug-triage` | bug analysis | repro / root cause / fix advice |
 | Testing | `un-test-report` | `report.md` | coverage, runs, residual risk |
+
+**Methodology discipline layer (6, new)** — *how* to build, not *what* to produce:
+
+| Skill | Enforces |
+|---|---|
+| `un-tdd-guard` | RED-GREEN-REFACTOR; failing test before any code; delete code written without a test |
+| `un-systematic-debugging` | 4-phase root cause: reproduce → locate → root-cause → fix+verify |
+| `un-verify-before-done` | evidence-based completion gate, not a claim |
+| `un-git-worktree` | isolate parallel work, keep main tree clean |
+| `un-parallel-agents` | dispatch independent tasks to fresh sub-agents |
+| `un-skill-authoring` | meta: author new skills per this repo's conventions |
+
+**Missing stages (11, new)** — fill gaps before/after the core pipeline:
+
+| Stage | Skill | Produces |
+|---|---|---|
+| Pre-requirement | `un-tech-spike` | `tech-spike.md` (go/no-go) |
+| Design | `un-threat-modeling` | `threat-model.md` (STRIDE) |
+| Design | `un-data-model` | `data-model.md` |
+| Design | `un-adr` | `adr/<nnn>.md` |
+| Design-UI | `un-i18n-plan` | `i18n-plan.md` |
+| Design-UI | `un-a11y-check` | `a11y-check.md` |
+| Post-dev | `un-doc-gen` | `docs/` (README/API/runbook/guide) |
+| Post-test | `un-release-checklist` | `release-checklist.md` |
+| Post-test | `un-cicd` | `cicd.md` + pipeline config |
+| Pre-prod | `un-observability-plan` | `observability-plan.md` |
+| Ops | `un-postmortem` | `postmortem/<date>.md` (blameless) |
 
 ### Key design point — the contract bridge
 
