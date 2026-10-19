@@ -3,9 +3,9 @@
 
 Scans <workspace> for project markers and reports which platforms (iOS,
 Android, Flutter, React Native, React Web, Vue Web, H5/Web, WeChat Mini
-Program, Uni-app) are present, their root directory, confidence, and the
-markers that matched. Used by the un-multi-platform-dev skill to resolve target
-platforms without guessing.
+Program, Uni-app, HarmonyOS / 鸿蒙) are present, their root directory,
+confidence, and the markers that matched. Used by the un-multi-platform-dev
+skill to resolve target platforms without guessing.
 
 Usage:
     python3 detect_platforms.py <workspace> [--json]
@@ -19,7 +19,7 @@ import sys
 IGNORE_DIRS = {
     '.git', 'node_modules', 'Pods', 'build', 'dist', '.next', '.gradle',
     '.idea', 'vendor', 'DerivedData', '.venv', 'venv', '__pycache__',
-    'Carthage', '.build',
+    'Carthage', '.build', 'oh_modules', '.hvigor',
 }
 MAX_DEPTH = 8
 
@@ -33,11 +33,13 @@ DISPLAY = {
     'h5_web': 'H5 / Web',
     'wechat_mp': 'WeChat Mini Program',
     'uniapp': 'Uni-app',
+    'harmonyos': 'HarmonyOS / 鸿蒙',
 }
 CONFIDENCE = {
     'ios': 'high', 'android': 'high', 'flutter': 'high',
     'react_native': 'high', 'wechat_mp': 'high', 'uniapp': 'high',
     'react_web': 'medium-high', 'vue_web': 'medium-high', 'h5_web': 'medium',
+    'harmonyos': 'high',
 }
 
 FLUTTER_RE = re.compile(r'^\s*flutter:\s*(sdk|\n|$)', re.M)
@@ -122,6 +124,12 @@ def detect_dir(dirpath):
             markers.append('project.config.json')
         found['wechat_mp'] = markers
 
+    # HarmonyOS / 鸿蒙 (ArkTS / ArkUI)
+    harmony_markers = [e for e in ('oh-package.json5', 'build-profile.json5',
+                                   'module.json5') if e in entries]
+    if harmony_markers:
+        found['harmonyos'] = harmony_markers
+
     # H5 / vanilla web (only when not already a framework web project)
     if ('index.html' in entries or 'vite.config.ts' in entries
             or 'vite.config.js' in entries):
@@ -184,7 +192,7 @@ def main():
     if not platforms:
         print(f'No recognized client platforms found in:\n  {ws}')
         print('Scanned for: iOS, Android, Flutter, React Native, React/Vue Web, '
-              'H5, WeChat Mini Program, Uni-app.')
+              'H5, WeChat Mini Program, Uni-app, HarmonyOS / 鸿蒙.')
         return
 
     print(f'Detected platforms in:\n  {ws}\n')

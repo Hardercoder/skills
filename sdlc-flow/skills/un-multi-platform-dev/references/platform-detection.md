@@ -18,6 +18,7 @@ the script is unavailable or its output needs interpretation.
 | **H5 / vanilla web** | `index.html` at root, `vite.config.ts`/`vite.config.js`, or a plain HTML/JS project with no framework | medium |
 | **WeChat Mini Program** | `app.json` (+ `project.config.json`) | high |
 | **Uni-app** | `pages.json` + `manifest.json`, or `package.json` with `@dcloudio/uni-app` | high |
+| **HarmonyOS / 鸿蒙** | `oh-package.json5` at root, `build-profile.json5`, `module.json5`, or any `*.ets` source (ArkTS) | high |
 
 ## Conflict resolution
 
@@ -38,7 +39,8 @@ the script is unavailable or its output needs interpretation.
 
 Skip these to avoid false positives and slow scans: `node_modules`, `.git`,
 `Pods`, `build`, `dist`, `.next`, `.gradle`, `.idea`, `vendor`, `DerivedData`,
-`*.xcassets` (inside an iOS project, not a root marker).
+`*.xcassets` (inside an iOS project, not a root marker), `oh_modules` (HarmonyOS
+dependency cache), `.hvigor` (HarmonyOS build cache).
 
 ## Using the detector
 

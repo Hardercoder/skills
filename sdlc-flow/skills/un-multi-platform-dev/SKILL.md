@@ -9,7 +9,8 @@ agent_created: true
 ## Overview
 
 Orchestrate feature development across multiple client platforms (iOS, Android,
-Flutter, React, React Native, H5/Web, WeChat Mini Program, Uni-app) from a
+Flutter, React, React Native, H5/Web, WeChat Mini Program, Uni-app,
+HarmonyOS / 鸿蒙) from a
 single instruction. The skill supports two working modes:
 
 - **Simultaneous (多端同步开发)** — implement one feature across all target
@@ -163,13 +164,15 @@ platforms).
 
 - One contract, N platform implementations generated in parallel.
 - Implement each platform independently from the same contract to avoid drift.
+  推荐用**并行子 agent**实现，见下方「并行子 agent 编排」。
 - After each platform, re-check against the contract and append platform notes
   so later platforms benefit from earlier discoveries.
 
 ### Mode B — Sync / port from a source platform (从一端同步到多端)
 
 - Read the source platform's feature implementation; extract behavior, data
-  model, and edge cases.
+  model, and edge cases. 各目标端同样推荐用**并行子 agent**实现（见下方
+  「并行子 agent 编排」）。
 - Lift it into the platform-agnostic contract (this is where platform-specific
   quirks get normalized into shared behavior).
 - Implement each target platform from the contract. Where a target platform
@@ -186,6 +189,23 @@ up to date, restoring "the contract is the latest 真源 for every feature". Det
 steps in `references/workflows.md` → Mode C. This is the standard close-out for
 "一开始 A 是真源、后来 B 是真源": never keep flip-flopping which platform is truth —
 promote the leader's changes into the contract, then catch everyone else up.
+
+### 并行子 agent 编排（推荐）
+
+多端开发是 fan-out 的典型场景：与其在主对话里串行写 N 个端，不如为**每个目标端各起
+一个子 agent**（Agent 工具），从同一份契约并行实现，再由父 agent 汇总对账。这能显著
+提速，并避免一个端的上下文污染另一个端。
+
+- **启动**：在一条消息里并行发起 N 个 Agent 调用，每个携带：① 功能契约全文；
+  ② 该端名称（如 `ios`）；③ 该端工程根路径；④ `workflows.md` 里该端的实现要点与
+  验证命令；⑤ 已有的 Platform Notes（如有）。
+- **子 agent 职责**：严格按契约为本端实现，不参考其它端；实现后跑该端验证命令
+  （`xcodebuild` / `./gradlew test` / `flutter test` / `npm test` 等），记录结果；
+  把本端的 Platform Notes 与任何偏离写回。
+- **汇总对账**：所有子 agent 返回后，父 agent 按 Mode A 第 4 步 / Mode B 第 5 步
+  做冲突裁决与同步报告；必要时再跑漂移检查（见 Workflow 第 8 步）。
+- **注意**：契约是各子 agent 共享的唯一真源；不要把其它端的代码塞进子 agent 上下文，
+  否则会重新引入分叉。
 
 ## Rules
 

@@ -65,11 +65,28 @@ except Exception:  # pragma: no cover - fallback if detect script missing
         'react_native': 'React Native', 'react_web': 'React (Web)',
         'vue_web': 'Vue (Web)', 'h5_web': 'H5 / Web',
         'wechat_mp': 'WeChat Mini Program', 'uniapp': 'Uni-app',
+        'harmonyos': 'HarmonyOS / 鸿蒙',
     }
     _CONF = {k: 'medium' for k in DISPLAY}
     _scan = None
 
 PLATFORM_KEYS = set(DISPLAY.keys())
+
+# Per-platform source-file extensions used to make drift matching
+# language-aware (so a symbol match in a README / config is not mistaken
+# for an implementation). Unknown platforms fall back to all text files.
+PLATFORM_EXTS = {
+    'ios': {'.swift', '.m', '.mm', '.h'},
+    'android': {'.kt', '.kts', '.java'},
+    'flutter': {'.dart'},
+    'react_native': {'.ts', '.tsx', '.js', '.jsx'},
+    'react_web': {'.ts', '.tsx', '.js', '.jsx'},
+    'vue_web': {'.vue', '.js', '.ts'},
+    'h5_web': {'.html', '.js', '.ts', '.css', '.vue'},
+    'wechat_mp': {'.wxml', '.wxss', '.js', '.ts', '.json'},
+    'uniapp': {'.vue', '.js', '.ts'},
+    'harmonyos': {'.ets', '.ts'},
+}
 
 IGNORE_DIRS = {
     '.git', 'node_modules', 'Pods', 'build', 'dist', '.next', '.gradle',
@@ -79,7 +96,7 @@ IGNORE_DIRS = {
 
 TEXT_EXT = {
     '.swift', '.m', '.mm', '.h', '.java', '.kt', '.kts', '.dart', '.js',
-    '.jsx', '.ts', '.tsx', '.vue', '.py', '.rb', '.go', '.rs', '.c', '.cpp',
+    '.jsx', '.ts', '.tsx', '.ets', '.vue', '.py', '.rb', '.go', '.rs', '.c', '.cpp',
     '.cs', '.html', '.wxml', '.wxss', '.css', '.scss', '.json', '.yaml',
     '.yml', '.xml', '.gradle', '.md', '.toml',
 }
@@ -87,7 +104,7 @@ TEXT_EXT = {
 # Platforms whose "surface" is route / screen string tokens (comparable).
 ROUTE_PLATFORMS = {
     'flutter', 'react_web', 'react_native', 'vue_web', 'h5_web',
-    'wechat_mp', 'uniapp',
+    'wechat_mp', 'uniapp', 'harmonyos',
 }
 
 # Per-platform public-symbol extractors (best-effort, for the symbol inventory).
@@ -107,6 +124,8 @@ SYMBOL_PATTERNS = {
                r'<([A-Z][A-Za-z_]\w*)\b'],
     'wechat_mp': [r'\b(\w+):\s*function\b'],
     'uniapp': [r'\bname:\s*[\'"]([A-Za-z_]\w*)[\'"]'],
+    'harmonyos': [r'@Entry\s+struct\s+([A-Za-z_]\w*)',
+                  r'\bstruct\s+([A-Za-z_]\w*)', r'\bclass\s+([A-Za-z_]\w*)'],
 }
 
 
@@ -156,8 +175,13 @@ def _is_textish(path):
     return os.path.splitext(path)[1].lower() in TEXT_EXT
 
 
-def grep_root(root, pattern, cap_hits=50):
-    """Return (found, sample) where sample is (relpath, lineno) or None."""
+def grep_root(root, pattern, cap_hits=50, exts=None):
+    """Return (found, sample) where sample is (relpath, lineno) or None.
+
+    If `exts` is given, only files with those extensions are scanned
+    (language awareness) so a symbol match in a README / config file is not
+    mistaken for an implementation.
+    """
     try:
         rx = re.compile(pattern)
     except re.error as e:
@@ -168,6 +192,8 @@ def grep_root(root, pattern, cap_hits=50):
         for fn in files:
             p = os.path.join(dirpath, fn)
             if not _is_textish(p):
+                continue
+            if exts is not None and os.path.splitext(p)[1].lower() not in exts:
                 continue
             try:
                 with open(p, 'r', encoding='utf-8', errors='ignore') as fh:
@@ -348,7 +374,7 @@ def run_checkpoint(platforms, contract_text):
             sample = None
             bad = None
             for r in roots:
-                ok, smp = grep_root(r, pat)
+                ok, smp = grep_root(r, pat, exts=PLATFORM_EXTS.get(name))
                 if ok is False and isinstance(smp, tuple) and smp[0] == 'BAD_REGEX':
                     bad = smp[1]
                     continue
@@ -370,15 +396,23 @@ def run_checkpoint(platforms, contract_text):
             'default_match': default_match, 'version': version}
 
 
-def _route_tokens(root):
-    """Collect route / screen string tokens from a platform root."""
+def _route_tokens(root, exts=None):
+    """Collect route / screen string tokens from a platform root.
+
+    Captures any quoted string that contains at least one slash (so both
+    `/profile` web-style and `pages/profile` HarmonyOS/ArkTS-style routes
+    align), excludes file/asset paths, and normalizes to the leaf segment
+    downstream.
+    """
     toks = set()
-    rx = re.compile(r'["\'`]([/A-Za-z0-9_\-]+)["\'`]')
+    rx = re.compile(r'["\'`]((?:/[A-Za-z0-9_\-]+|[A-Za-z0-9_\-]+(?:/[A-Za-z0-9_\-]+)+))["\'`]')
     for dirpath, dirs, files in os.walk(root):
         dirs[:] = [d for d in dirs if d not in IGNORE_DIRS]
         for fn in files:
             p = os.path.join(dirpath, fn)
             if not _is_textish(p):
+                continue
+            if exts is not None and os.path.splitext(p)[1].lower() not in exts:
                 continue
             try:
                 with open(p, 'r', encoding='utf-8', errors='ignore') as fh:
@@ -387,8 +421,6 @@ def _route_tokens(root):
                 continue
             for m in rx.finditer(text):
                 t = m.group(1)
-                if not t.startswith('/') and '/' not in t:
-                    continue
                 if '.' in t:  # skip asset/extension paths
                     continue
                 segs = [s for s in t.strip('/').split('/') if s]
@@ -402,7 +434,7 @@ def _route_tokens(root):
     return toks
 
 
-def _api_tokens(root):
+def _api_tokens(root, exts=None):
     """API endpoint path tokens: quoted paths that look like REST endpoints
     (>=2 segments, exclude asset dirs and file paths)."""
     toks = set()
@@ -412,6 +444,8 @@ def _api_tokens(root):
         for fn in files:
             p = os.path.join(dirpath, fn)
             if not _is_textish(p):
+                continue
+            if exts is not None and os.path.splitext(p)[1].lower() not in exts:
                 continue
             try:
                 with open(p, 'r', encoding='utf-8', errors='ignore') as fh:
@@ -433,7 +467,7 @@ def _api_tokens(root):
     return toks
 
 
-def _model_tokens(root):
+def _model_tokens(root, exts=None):
     """Best-effort entity / field names from class/struct/data-class defs."""
     toks = set()
     pats = [
@@ -448,6 +482,8 @@ def _model_tokens(root):
             p = os.path.join(dirpath, fn)
             if not _is_textish(p):
                 continue
+            if exts is not None and os.path.splitext(p)[1].lower() not in exts:
+                continue
             try:
                 with open(p, 'r', encoding='utf-8', errors='ignore') as fh:
                     text = fh.read()
@@ -459,7 +495,7 @@ def _model_tokens(root):
     return toks
 
 
-def _i18n_tokens(root):
+def _i18n_tokens(root, exts=None):
     """Best-effort i18n string keys from t()/NSLocalizedString/R.string/arb/json."""
     toks = set()
     pats = [
@@ -474,6 +510,8 @@ def _i18n_tokens(root):
         for fn in files:
             p = os.path.join(dirpath, fn)
             if not _is_textish(p):
+                continue
+            if exts is not None and os.path.splitext(p)[1].lower() not in exts:
                 continue
             try:
                 with open(p, 'r', encoding='utf-8', errors='ignore') as fh:
@@ -490,15 +528,15 @@ def _i18n_tokens(root):
     return toks
 
 
-def extract_axis(root, axis):
+def extract_axis(root, axis, exts=None):
     """Dispatch token extraction by axis (routes | api | model | i18n)."""
     if axis == 'api':
-        return _api_tokens(root)
+        return _api_tokens(root, exts)
     if axis == 'model':
-        return _model_tokens(root)
+        return _model_tokens(root, exts)
     if axis == 'i18n':
-        return _i18n_tokens(root)
-    return _route_tokens(root)  # default routes
+        return _i18n_tokens(root, exts)
+    return _route_tokens(root, exts)  # default routes
 
 
 def run_symbol(platforms, axis='routes', source=None):
@@ -521,7 +559,7 @@ def run_symbol(platforms, axis='routes', source=None):
     for name, roots in comparable.items():
         raw = set()
         for r in roots:
-            raw |= extract_axis(r, axis)
+            raw |= extract_axis(r, axis, PLATFORM_EXTS.get(name))
         for t in raw:
             leaf = t.strip('/').split('/')[-1] if axis in ('routes', 'api') else t
             leaf_map.setdefault(leaf, {}).setdefault(name, set()).add(t)

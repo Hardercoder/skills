@@ -36,7 +36,7 @@ python3 scripts/drift_check.py --platform flutter:<r> --platform react_web:<r> \
 ```
 
 - `--platform NAME:PATH` 可重复；端名取 `ios / android / flutter / react_native /
-  react_web / vue_web / h5_web / wechat_mp / uniapp`。
+  react_web / vue_web / h5_web / wechat_mp / uniapp / harmonyos`。
 - 不给 `--platform` 时，会用 `detect_platforms.py` 扫描 `--workspace`（默认当前目录）。
 - 不确定写 `--json`，CI 里用 `jq` 判断 `absent` 数量决定是否阻断。
 
@@ -82,7 +82,8 @@ Platform Notes 说明"该端确实没有此功能"，要么去补代码。
 ## symbol 模式详解（启发式）
 
 只比较"路由可比较"的端：`flutter / react_web / react_native / vue_web / h5_web /
-wechat_mp / uniapp`（它们的界面以路由/页面字符串表达，可对齐）。iOS / Android 的
+wechat_mp / uniapp / harmonyos`（它们的界面以路由/页面字符串表达，可对齐；
+HarmonyOS 的 ArkTS 用 `router.pushUrl` 的字符串目标与之对齐）。iOS / Android 的
 原生界面不是字符串路由，不参与此对比。
 
 - 抽取各端源码里的路由/页面字符串（`/profile`、`pages/settings/settings` 等）。
@@ -102,10 +103,10 @@ symbol 模式默认只比"路由/页面"（屏幕级），可切换轴做更细�
 
 | `--axis` | 比什么 | 哪些端可比 |
 |----------|--------|------------|
-| `routes`（默认） | 路由 / 页面字符串（叶节点归一化） | 仅 web/Flutter/RN/WeChat/Uni-app |
+| `routes`（默认） | 路由 / 页面字符串（叶节点归一化） | web/Flutter/RN/WeChat/Uni-app/HarmonyOS |
 | `api` | API 端点路径（如 `/api/v1/users`） | 全部端（含 iOS/Android） |
 | `model` | 数据模型 / 实体 / 字段名 | 全部端 |
-| `i18n` | 国际化字符串 key（`t('...')` / `NSLocalizedString` / `R.string.x` / `.arb`/`.json`） | 全部端 |
+| `i18n` | 国际化字符串 key（`t('...')` / `NSLocalizedString` / `R.string.x` / `.arb`/`.json` / HarmonyOS `$r('app.string.x')`） | 全部端 |
 
 ```bash
 # 比各端 API 端点是否齐

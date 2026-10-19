@@ -75,6 +75,25 @@ Use `references/templates/feature-contract.md`.
 8. **漂移验证**：重跑 checkpoint 模式，矩阵里 A/C/D 不应再标 ✘ / 落后。
 9. **同步报告**：记录迁移原因、promote 了什么、各端追赶项与结果。
 
+## 并行子 agent 编排（推荐）
+
+多端开发适合 fan-out：为每个目标端各起一个子 agent（Agent 工具），从同一份契约
+并行实现，父 agent 汇总对账。比起在主对话串行写 N 个端，这样更快且隔离更好，也避免
+一个端的上下文污染另一个端。
+
+子 agent 提示词模板（每个端复制一份，替换 `<端名>` / `<根路径>` / `<验证命令>`）：
+
+> 你是多端开发的一个子 agent，只负责 **<端名>** 一端。
+> 1. 阅读以下功能契约（平台无关，唯一真源）：<契约全文>
+> 2. 在 <根路径> 中按契约实现该功能，不要参考其它端的代码。
+> 3. 实现后运行验证命令：<该端验证命令，见上方 Per-platform 小节>。
+> 4. 返回：① 实现摘要；② 验证结果（通过/失败 + 关键输出）；③ 本端的 Platform
+>    Notes 与任何偏离契约的地方。
+> 只产出本端结果，不要修改其它端。
+
+父 agent 在一条消息里并行发起这些调用；全部返回后按 Mode A 第 4 步 / Mode B 第 5 步
+做冲突裁决、更新契约、产出同步报告，并跑漂移检查确认各端追平。
+
 ## Per-platform implementation & verification tips
 
 ### iOS (Swift / SwiftUI)
@@ -123,6 +142,13 @@ Use `references/templates/feature-contract.md`.
   `pages.json`; conditionals via `process.env.UNI_PLATFORM`.
 - Verification: `npm run dev:%PLATFORM%` / `build:%PLATFORM%`.
 - Notes: one codebase → many targets; verify each platform build separately.
+
+### HarmonyOS / 鸿蒙 (ArkTS / ArkUI)
+- Patterns: `@Entry struct` + `@Component` 声明式 UI；状态用 `@State` / `@Link` /
+  `@Prop`；路由用 `router.pushUrl` / `Navigator`；网络用 `@ohos.net.http`。
+- Verification: `hvigorw assembleHap` / `hvigorw test`；DevEco Studio 构建预览。
+- Notes: 工程根有 `oh-package.json5` / `build-profile.json5` / `module.json5`，
+  源码为 `.ets`（ArkTS）。多设备（phone / tablet / wearable）需分别验证。
 
 ## Reconciliation checklist
 
